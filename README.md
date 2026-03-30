@@ -33,6 +33,10 @@ Your skill is defined by the `manifest.json`. You must submit this manifest via 
 - **`name`**: Human-readable name of your skill.
 - **`interface`**: `hybrid` allows both Webhooks and MCP.
 - **`triggers`**: Defines what events your skill "listens" to. By default, it listens to `interaction.dialog` (voice).
+- **`permissions`**: List of permissions your skill needs. Common ones:
+    - `notification.send`: (Implicit) Ability to sent toasts/TTS.
+    - `user.profile.read`: Ability to see the user's name.
+    - `user.location.read`: Ability to see city/country/GPS.
 - **`domains`**: Natural language descriptions that tell the Trace Router when to send an event to your skill.
 - **`allowedTools`**: Declares which platform-managed tools (like `mail.send`) your skill can use.
 
@@ -60,6 +64,7 @@ Check `src/index.ts` to see how these are constructed.
 
 - **HMAC Verification**: All requests from Trace are signed. The `src/hmac.ts` utility ensures only legitimate Trace events are processed.
 - **Proxy IDs**: `user.id` is a stable, unique proxy for that specific user. Use it as a primary key in your database.
+- **User Info**: If you have the right permissions, the `user` object will contain `name`, `timezone`, and `location`. Timezone and Locale are always provided.
 
 ---
 

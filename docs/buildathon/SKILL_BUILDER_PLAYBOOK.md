@@ -10,9 +10,10 @@ Welcome to the Trace Buildathon! This guide will help you go from zero to a full
 3. [The 10-Minute Quickstart](#3-the-10-minute-quickstart)
 4. [Choosing Your Interface](#4-choosing-your-interface)
 5. [The Power of Platform Actions](#5-the-power-of-platform-actions)
-6. [Security: HMAC & Proxy IDs](#6-security-hmac--proxy-ids)
-7. [Deployment Guide](#7-deployment-guide)
-8. [Example Ideas](#8-example-ideas)
+6. [Personalization & User Data](#6-personalization--user-data)
+7. [Security: HMAC & Proxy IDs](#7-security-hmac--proxy-ids)
+8. [Deployment Guide](#8-deployment-guide)
+9. [Example Ideas](#9-example-ideas)
 
 ---
 
@@ -125,7 +126,39 @@ Send emails or create calendar events using the user's *own* accounts without ha
 
 ---
 
-## 6. Security: HMAC & Proxy IDs
+## 6. Personalization & User Data
+To build context-aware skills, you can request access to the user's profile and location. 
+
+### Requesting Permissions
+Add these to your `manifest.json`:
+```json
+"permissions": [
+  "user.profile.read",
+  "user.location.read"
+]
+```
+
+### What you get in the Payload
+When these are granted, your `user` object in Webhook/MCP calls will include:
+```json
+"user": {
+  "id": "proxied_id_...",
+  "locale": "en-US",
+  "timezone": "America/New_York",
+  "name": "Alex Smith",
+  "location": {
+    "city": "Brooklyn",
+    "country": "USA",
+    "latitude": 40.6782,
+    "longitude": -73.9442
+  }
+}
+```
+*Note: Timezone and Locale are always provided.*
+
+---
+
+## 7. Security: HMAC & Proxy IDs
 
 ### HMAC Verification
 Every request from Trace is signed. You **must** verify it to ensure the request is legitimate.
@@ -137,14 +170,6 @@ const timestamp = req.headers['x-trace-timestamp'];
 
 ### Proxy IDs
 If you need to store data for a user, use the `user.id` provided in the payload. It is a stable, unique proxy ID for that specific user + your skill. It remains the same for that user forever but is different for other skills.
-
----
-
-## 7. Common Pitfalls & Troubleshooting
-- **Ngrok Timeout**: Free ngrok URLs change every time you restart. Remember to update your Trace Dashboard endpoints!
-- **HMAC Failures**: Ensure your `.env` secret matches EXACTLY what is in the Dashboard. No extra spaces.
-- **JSON-RPC Version**: MCP requires `jsonrpc: "2.0"` in both requests and responses.
-- **Async Timeout**: If your webhook takes > 5 seconds, return `202 Accepted` and use the `callback_url`.
 
 ---
 
@@ -164,6 +189,6 @@ When you're ready to go live for the judges:
 ---
 
 ### Need Help?
-Reach out to **ishaan@endlessriver.ai** or check the **[Developer Reference](http://localhost:3000/dashboard/docs)** (or `/dashboard/docs` on your Trace domain) for more details.
+Reach out to **ishaan@endlessriver.ai** or check the **[Developer Reference](https://endlessriver.ai/dashboard/docs)** (or `/dashboard/docs` on your Trace domain) for more details.
 
 **Happy Building! 🛠️**

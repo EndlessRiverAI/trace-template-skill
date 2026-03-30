@@ -13,7 +13,9 @@
     "general": "Handle general greetings and tests for the template skill. Match utterances like 'test template' or 'hello from template'."
   },
   "permissions": [
-    "notification.send"
+    "notification.send",
+    "user.profile.read",
+    "user.location.read"
   ],
   "allowedTools": [
     "mail.send"
