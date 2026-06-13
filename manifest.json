@@ -4,7 +4,9 @@
   "interface": "hybrid",
   "endpoints": {
     "webhook": "https://your-domain.ngrok-free.app/webhook",
-    "mcp": "https://your-domain.ngrok-free.app/mcp"
+    "mcp": "https://your-domain.ngrok-free.app/mcp",
+    "install_webhook": "https://your-domain.ngrok-free.app/trace-install",
+    "user_install_url": "https://your-domain.ngrok-free.app/install"
   },
   "triggers": [
     { "channel": "instant.message", "routing_mode": "active" },
@@ -22,6 +24,7 @@
   "allowedTools": [
     "mail.send"
   ],
+  "hw_triggers": [],
   "data_retention": {
     "max_days": 30,
     "deletion_webhook": "https://your-domain.ngrok-free.app/delete-user"

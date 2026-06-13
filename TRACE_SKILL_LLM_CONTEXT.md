@@ -71,12 +71,15 @@ The manifest is the single source of truth for how Trace routes events to your s
 {
   "name": "My Skill",
   "description": "One sentence describing what this skill does for the user.",
+  "aboutUrl": "https://your-server.com/skills/my-skill/about",  // optional — see "About page" below
   "version": "1.0.0",
   "interface": "hybrid",
 
   "endpoints": {
-    "webhook": "https://your-server.com/webhook",
-    "mcp":     "https://your-server.com/mcp"
+    "webhook":          "https://your-server.com/webhook",
+    "mcp":              "https://your-server.com/mcp",
+    "install_webhook":  "https://your-server.com/install",      // optional — platform POSTs here on install/uninstall. See §10B.
+    "user_install_url": "https://your-server.com/trace-install" // optional — users are redirected here when they click "Install" in the Skill Store.
   },
 
   "triggers": [
@@ -101,6 +104,7 @@ The manifest is the single source of truth for how Trace routes events to your s
   "permissions": [
     "user.profile.read",
     "user.location.read"
+    // "proactive.receive"  — add this when proactive:true, so user explicitly consents
   ],
 
   "allowedTools": ["mail.send"],
@@ -114,7 +118,16 @@ The manifest is the single source of truth for how Trace routes events to your s
 
   "isPrivate": false,
 
-  "proactive": false
+  "hw_triggers": [],
+  // "hw_triggers": ["instant.image", "instant.dialog"]
+  // instant.image  — skill can fire the glasses camera on demand; AI analysis dispatched back to
+  //                  this skill only (hw.image_result channel). Requires hw.camera.trigger permission.
+  // instant.dialog — after any notification whose body contains '?', glasses open mic immediately
+  //                  after TTS (no button press). Separate opt-in from instant.image.
+
+  "proactive": false,
+  // "proactiveReason": "Required when proactive:true — explain what, when, why not user-triggered.",
+  // "isPrivate": false
 }
 ```
 
@@ -124,25 +137,32 @@ The manifest is the single source of truth for how Trace routes events to your s
 |---|---|---|---|
 | `name` | string | Yes | 1–80 chars. Shown in Skill Store. |
 | `description` | string | No | Max 500 chars. |
+| `aboutUrl` | URI | No | Link to a lightweight, user-facing "what does this skill do" page. Shown as a "What can it do?" preview link in the Skill Store (opens in a new tab — does not affect in-app navigation). See "About page" below. |
 | `version` | string | Yes | Semver: `1.0.0` |
 | `interface` | `webhook` \| `mcp` \| `hybrid` | Yes | See §1 |
 | `endpoints.webhook` | URI | If `webhook` or `hybrid` | Your `/webhook` URL |
 | `endpoints.mcp` | URI | If `mcp` or `hybrid` | Your `/mcp` URL |
 | `endpoints.callback` | URI | No | Alternate callback target (rarely needed) |
+| `endpoints.install_webhook` | URI | No | Platform POSTs here (HMAC-signed) on user install/uninstall. Required when using proactive push — this is how your skill learns each user's `proxyUserId`. See §10B. |
+| `endpoints.user_install_url` | URI | No | Where users are redirected when they click "Install" in the Trace Skill Store. Use this to run an OAuth consent screen or collect per-user config before installation is confirmed. |
 | `triggers` | array | No | Which channels wake your skill |
 | `triggers[].channel` | string | Yes | `instant.image`, `media.photo`, `media.video`, `media.audio`, `instant.message`, `device.context` |
 | `triggers[].routing_mode` | `active` \| `passive` | No | Default `active`. Use `passive` for silent background processing. |
 | `triggers[].filter` | object | No | `{"hasImage": true}`, `{"source": "phone_image"}`, etc. |
 | `domains` | object | No | Keys are domain names, values describe what utterances/images to route. Required when using `instant.message` or media triggers. |
 | `execution.mode` | `sync` \| `async` | Yes | Always `async` for `media.*` channels. |
-| `permissions` | array | No | Only `user.profile.read` and `user.location.read` are accepted. Channel-implied permissions are added automatically — do not repeat them here. |
+| `permissions` | array | No | Accepted values: `user.profile.read`, `user.location.read`, `proactive.receive`, `cross_user.write`. Channel-implied permissions (e.g. `media.photo.read`) are derived automatically — do not repeat them here. |
 | `allowedTools` | array | No | `mail.send`, `calendar.create` |
 | `dataRetention.max_days` | number | Yes | 1–730 |
 | `dataRetention.deletion_webhook` | URI | Yes | Called when user uninstalls your skill. |
 | `categories` | array | No | Store browsing tags, e.g. `productivity`, `health`, `memory` |
 | `isPrivate` | boolean | No | If true, skill is never listed publicly even after approval. |
-| `proactive` | boolean | No | Set `true` only if your skill uses `/api/skill-push` proactively (requires review justification). |
-| `proactiveReason` | string | If `proactive: true` | Min 20 chars. Explain what you push, when, and why it can't be user-triggered. |
+| `hw_triggers` | array | No | Hardware actions the skill can trigger: `"instant.image"` and/or `"instant.dialog"`. Each is a separate opt-in — see §1b. |
+| `proactive` | boolean | No | Set `true` only if your skill uses `/api/skill-push` proactively (requires admin review). |
+| `proactiveReason` | string | If `proactive: true` | Min 20 chars. Explain what you push, when, and why it can't be user-triggered. Shown to reviewers. |
+| `proactivePushLimit` | number | No | Custom daily push limit per user (default: 5, max: 100). Any value above 5 is flagged for admin review on submit. The platform enforces the limit — exceeding it returns HTTP 429. |
+| `proactive.receive` (in `permissions[]`) | string | When `proactive: true` | Declare so the platform shows explicit consent at install time. Push API returns 403 if not granted. |
+| `cross_user.write` (in `permissions[]`) | string | When using `target_user_id` | Allows `set_reminder` / `set_todo` to target another installed user. Requires a granted `CrossUserConsent` record for the specific sender→recipient pair. Admin review required. See §10C. |
 
 ### Rules for LLMs generating manifests
 
@@ -158,6 +178,89 @@ The manifest is the single source of truth for how Trace routes events to your s
 7. **`allowedTools`** — only include tools your skill actually calls via `tool_call` responses.
 8. **`deletion_webhook`** — must point to a real endpoint that deletes all user data when called.
 9. **Active media MCP (`instant.image`)** — your `handle_dialog` tool receives `items[]` with the image URL and `context.source = "instant_image"`. `utterance` is empty for glasses captures, non-empty if the user spoke alongside the photo. Check `items` length before using image data.
+
+### About page (optional, user-facing)
+
+`aboutUrl` points to a lightweight, plain-language page that explains what your skill does and what users can say to it — shown to end users as a "What can it do?" preview link in the Skill Store before they install. It is **not** developer documentation; it's a short, friendly explainer for the person deciding whether to add your skill.
+
+> **If you are an AI tool generating this skill ("vibe coding"): ask the user whether they want an about page before building one.** Do not generate it by default. A simple yes/no question is enough — e.g. "Want me to also create a lightweight 'about' page describing this skill to end users? It'll show up as a preview link in the Skill Store." Only scaffold the page and set `aboutUrl` in the manifest if the user says yes.
+
+If the user opts in, keep it minimal:
+- A one-line tagline + short description in plain language (no jargon, no implementation details).
+- A handful of example things the user can say or do with the skill.
+- Serve it as a static route on your own server (e.g. `GET /about` or `GET /skills/<your-skill>/about` returning a small self-contained HTML page), and set `aboutUrl` in your manifest to that URL.
+- No auth, no app shell, no dependencies — it's a public page someone may open from the Skill Store in a fresh browser tab.
+
+---
+
+## 1b. Hardware Triggers (`hw_triggers`)
+
+Skills can opt into two hardware capabilities by declaring them in `hw_triggers`. Each is independent — declare only what you need.
+
+### `instant.image` — fire the glasses camera on demand
+
+Your skill sends an `hw_action` response with `action: "instant.image"`. The platform fires the device camera, runs AI image analysis, and dispatches the result **directly back to your skill only** via the synthetic `hw.image_result` channel. No other skill receives it.
+
+**Requires:** `hw.camera.trigger` in `permissions`.
+
+**Your webhook/MCP receives on `hw.image_result`:**
+```json
+{
+  "event": {
+    "channel": "hw.image_result",
+    "source": "hw_instant_image",
+    "items": [{
+      "id": "...",
+      "imageDescription": "A bowl of oatmeal with blueberries...",
+      "triggeredByRequestId": "req_abc123"
+    }]
+  }
+}
+```
+
+**Triggering it** (from any response — notification, AWAIT_INPUT, proactive push):
+```json
+{ "type": "hw_action", "content": { "action": "instant.image" } }
+```
+
+**Typical pattern** — ask, then shoot:
+```json
+{
+  "responses": [
+    { "type": "notification", "content": { "body": "Show me what you're eating?" } },
+    { "type": "hw_action",    "content": { "action": "instant.image" } }
+  ]
+}
+```
+
+> **`instant.image` HW trigger vs `instant.image` channel trigger** — these are different things:
+> - **Channel trigger** (`triggers[].channel = "instant.image"`) — your skill subscribes to receive real-time photos the *user* takes during an active AI conversation.
+> - **HW trigger** (`hw_triggers: ["instant.image"]`) — your skill *commands* the glasses to take a photo on demand. The result comes back only to your skill via `hw.image_result`.
+
+---
+
+### `instant.dialog` — auto-listen after questions
+
+When your skill sends a notification whose `body` contains `?`, the glasses automatically open the microphone immediately after TTS finishes — no button press required. The user's reply enters the normal AI dialog pipeline and can be routed back to your skill via pending context.
+
+**No extra permission needed** — declaring `"instant.dialog"` in `hw_triggers` is sufficient.
+
+**Pattern:**
+```json
+{ "type": "notification", "content": { "body": "Want me to log that meal?" } }
+```
+→ glasses speak the question → mic opens → user says "yes" → routes through dialog pipeline.
+
+> Skills without `"instant.dialog"` in `hw_triggers` never get instant dialog, even if the message ends with `?`.
+
+---
+
+### Rules for LLMs generating `hw_triggers`
+
+1. Only add `"instant.image"` when the skill flow explicitly requires the skill to *initiate* a camera capture. Do not add it just because the skill processes photos — use channel triggers for that.
+2. Only add `"instant.dialog"` when the skill sends question-style notifications and expects the user to answer hands-free.
+3. Both can coexist: `hw_triggers: ["instant.image", "instant.dialog"]` — e.g. "Should I photograph that?" (auto-listen) then fire camera on yes.
+4. Always add `"hw.camera.trigger"` to `permissions` alongside `"instant.image"`.
 
 ---
 
@@ -428,6 +531,7 @@ When answering a previous AWAIT_INPUT:
 {
   "content": [
     { "type": "text", "text": "You've had 1,200 kcal today across 3 meals." },
+    { "type": "text", "text": "Your scrapbook is ready.", "url": "https://example.com/view/abc123" },
     {
       "type": "embedded_responses",
       "responses": [
@@ -439,7 +543,7 @@ When answering a previous AWAIT_INPUT:
 }
 ```
 
-The `text` content is spoken via TTS on the glasses. `embedded_responses` deliver side-effects (notifications, reminders, tool calls, AWAIT_INPUT).
+The `text` content is spoken via TTS on the glasses (the platform may rewrite short stubs via the response finalizer). Optional `url` on the same object is shown in chat as a clickable link **as-is** — it is not narrated or rewritten. `embedded_responses` deliver side-effects (notifications, reminders, tool calls, AWAIT_INPUT).
 
 ### Multi-turn Sessions
 
@@ -559,34 +663,54 @@ All responses use the same shape whether in a webhook callback or MCP `embedded_
     "body": "Chicken and rice — 550 kcal",
     "tts": "Five hundred fifty calories logged.",
     "speak": false,
-    "persist": true
+    "persist": true,
+    "url": "https://your-app.com/view/meal/abc123"
   }
 }
 ```
 
 `speak: false` — suppress text-to-speech on the glasses speaker. Use this when the user is in a social setting (a wedding, concert, meeting) where a voice read-out would be disruptive. The notification still appears on the phone and in the activity feed.
 
+`url` — optional. When present, the notification card renders a tappable "Open link" button. The URL is shown as-is and opens in-app if it points to the Trace dashboard, or in a browser otherwise. Use this to deep-link the user to relevant content (e.g. a full report, a created item, a detail page).
+
 ### feed_item
 ```json
 {
   "type": "feed_item",
-  "content": { "feed_type": "skill", "title": "Logged 550 kcal lunch", "story": "..." }
+  "content": {
+    "feed_type": "skill",
+    "title": "Logged 550 kcal lunch",
+    "story": "...",
+    "url": "https://your-app.com/view/meals"
+  }
 }
 ```
+
+`url` — optional. When present, the feed card renders an inline tappable link chip (e.g. "Open", "View Agenda") below the item title. Use this to let the user navigate directly to the relevant content from the activity feed without opening a separate view.
 
 ### set_reminder
 ```json
 {
   "type": "set_reminder",
-  "content": { "reminderText": "Log dinner", "time": "2026-04-19T19:00:00Z" }
+  "content": {
+    "reminderText": "Take your blood pressure medicine",
+    "time": "2026-04-19T19:00:00Z",
+    "target_user_id": "<proxyUserId>"  // optional — see §10C. Requires cross_user.write + granted consent
+  }
 }
 ```
+
+When `target_user_id` is omitted, the reminder is created for the session user. When provided, the platform creates the reminder in the target user's account (three-layer consent check — see §10C).
 
 ### set_todo
 ```json
 {
   "type": "set_todo",
-  "content": { "title": "Review meeting notes", "priority": "HIGH" }
+  "content": {
+    "title": "Review meeting notes",
+    "priority": "HIGH",
+    "target_user_id": "<proxyUserId>"  // optional — same cross_user.write rules as set_reminder
+  }
 }
 ```
 
@@ -632,7 +756,15 @@ Use the user's own connected accounts without ever seeing a token.
 
 **`speak: false`** — suppresses TTS for the success notification. Use this when the MCP `text` content already acknowledged the action out loud — otherwise the user hears two spoken confirmations.
 
-Available tools: `mail.send` · `calendar.create`
+#### Available tool actions — live reference
+
+The full, **always up-to-date** list of every tool action you can call (curated tools + every integration toolkit the platform admin has registered, with exact parameter schemas) is published as Markdown:
+
+> **https://endlessriver.ai/available-tool-actions.md**
+
+Fetch this URL to discover valid `tool` keys and their `params`. It is generated live from the platform, so it reflects exactly what is callable right now — never hardcode a tool list from memory. Curated tools use bare keys (`mail.send`, `calendar.create`); integration tools use `toolkit/ACTION_KEY` (e.g. `googlesheets/GOOGLESHEETS_SEARCH_SPREADSHEETS`). Declare every key you use in your manifest's `allowedTools`.
+
+Built-in curated tools (always available): `mail.send` · `calendar.create`
 
 ### integration_action
 Perform an action in a third-party service the user has connected (e.g. Google Photos, Notion, Slack).
@@ -654,6 +786,80 @@ Unlike `tool_call`, integration actions are dispatched through the platform's in
 ```
 
 Declare required integrations in the Developer Console under `allowedIntegrations`. The platform injects available integrations into `granted_integrations[]` on every request.
+
+### request_cross_user_consent
+
+Ask the platform to request consent from another skill user to receive `set_reminder` / `set_todo` actions from the current user. The platform:
+1. Validates `cross_user.write` permission on the skill and `proactive.receive` on the target
+2. Creates a pending `CrossUserConsent` record
+3. Delivers an **interactive consent card** to the target user's phone/glasses (they see who is requesting and why, with Accept / Decline buttons)
+
+Only after the target accepts can `target_user_id` be used between this sender→recipient pair.
+
+```json
+{
+  "type": "request_cross_user_consent",
+  "content": {
+    "target_user_id": "<proxyUserId>",
+    "request_message": "Priya wants to send you reminders via Family AI."
+  }
+}
+```
+
+| Field | Required | Notes |
+|---|---|---|
+| `target_user_id` | Yes | Proxy user ID of the user whose consent you need |
+| `request_message` | Yes | Shown to the target user on their device. Max 200 chars. Plain text. |
+
+**When to use:** Fire this immediately after two users have linked to each other (e.g. after a link-code exchange or after someone joins your team). The platform is idempotent — if consent already exists or is pending, duplicate calls are silently ignored.
+
+**What the target user sees:** An interactive push card with your `request_message`, the skill name, and explanation of what accepting allows ("they can set reminders and tasks for you through this skill"). They tap Accept or Decline. The requesting user receives a Pusher event with the outcome.
+
+### hw_action
+
+Triggers a hardware action on the glasses. The skill must declare the action in `hw_triggers` in the manifest and have the corresponding permission.
+
+Only `"instant.image"` is currently supported.
+
+```json
+{
+  "type": "hw_action",
+  "content": {
+    "action": "instant.image"
+  }
+}
+```
+
+The platform fires the glasses camera, runs AI image analysis (via `/api/ai/image` — the same two-stage pipeline as real-time photos), and dispatches the result **directly back to your skill only** via the `hw.image_result` synthetic channel. No other skill receives it.
+
+**Your webhook/MCP then receives:**
+```json
+{
+  "event": {
+    "channel": "hw.image_result",
+    "source": "hw_instant_image",
+    "items": [{
+      "id": "...",
+      "imageDescription": "A bowl of oatmeal with blueberries on a wooden table.",
+      "triggeredByRequestId": "req_abc123"
+    }]
+  }
+}
+```
+
+Use `triggeredByRequestId` to correlate the result with the original request that triggered the camera.
+
+**`hw_action` can be combined with a notification to create a shoot-and-ask pattern:**
+```json
+{
+  "responses": [
+    { "type": "notification", "content": { "body": "Show me what you're eating?" } },
+    { "type": "hw_action",    "content": { "action": "instant.image" } }
+  ]
+}
+```
+
+See §1b for the full `hw_triggers` setup, permission requirements, and `instant.dialog` documentation.
 
 ### await_input
 See §7 above.
@@ -679,11 +885,13 @@ Declare permissions in the Developer Console. Data is injected only if the user 
 }
 ```
 
-| Permission | Fields unlocked |
+| Permission | Fields unlocked / effect |
 |---|---|
 | *(always)* | `id`, `timezone`, `locale` |
-| `user.profile.read` | `name` |
-| `user.location.read` | `location` |
+| `user.profile.read` | `name` on MCP/webhook dispatches; `first_name` + `last_name` on `install_webhook` payloads |
+| `user.location.read` | `location` (lat, lng, city, country) |
+| `proactive.receive` | Allows `/api/skill-push` to deliver messages to this user. Must also have `proactive: true` on the skill. Push returns 403 if not granted. |
+| `cross_user.write` | Allows skill to use `target_user_id` on `set_reminder` / `set_todo` to create them in another user's account. Three-layer enforcement: skill has this permission, a granted `CrossUserConsent` record exists for the sender→recipient pair, and the recipient has `proactive.receive`. Admin review required. |
 
 **Always use `user.id` (proxy) as your DB primary key.** Never store or log it externally — treat it as an opaque stable identifier.
 
@@ -697,23 +905,196 @@ Skills are stateless. Use a database keyed on `user.id`.
 - **Production:** Postgres, MongoDB, Redis
 
 ### B. Proactive Push / Scheduling
-To send a notification without a triggering event (daily summary, scheduled reminder):
+
+Proactive push lets your skill send notifications, messages, or any response type to a user without a triggering event (scheduled reminders, daily summaries, family alerts, etc.).
+
+#### Requirements (all three must be met)
+
+1. **`proactive: true`** + `proactiveReason` in the manifest → admin review before publish.
+2. **`"proactive.receive"` in `permissions[]`** → platform shows explicit consent at install time and enforces it at push time (push returns 403 if not granted).
+3. **`endpoints.install_webhook`** set → this is how your skill learns each user's `proxyUserId` for targeting.
+
+> **Optional: `endpoints.user_install_url`** — If your skill requires OAuth or per-user config before installation (e.g. connecting a third-party account), set this URL. When a user clicks "Install" in the Skill Store they are redirected here. After completing your flow, redirect them back to Trace to confirm the installation. The `install_webhook` fires once installation is confirmed.
+
+#### Step 1 — Register users via install_webhook
+
+The platform POSTs to `endpoints.install_webhook` (HMAC-signed, same verification scheme as `/webhook`) whenever a user installs or uninstalls your skill. Use this to build a local user registry keyed on `proxyUserId`.
+
+**Payload:**
+```json
+{
+  "event": "install",
+  "skill_id": "your-skill-id",
+  "user": {
+    "id": "<proxyUserId>",
+    "timezone": "Asia/Kolkata",
+    "locale": "en-IN",
+    "first_name": "Ishaan",    // only if user.profile.read granted
+    "last_name":  "Sharma"     // only if user.profile.read granted
+  },
+  "installed_at": "2026-06-03T10:00:00.000Z"
+}
+```
+
+On `event: "uninstall"` you should cancel any pending work for that user. The platform fires a separate `DELETE /delete-user` webhook for GDPR data erasure.
+
+**Express handler:**
+```typescript
+app.post('/install', verifyTraceSignature(HMAC_SECRET), (req, res) => {
+  const { event, user } = req.body;
+  if (event === 'install')   db.upsertUser(user.id, user.timezone);
+  if (event === 'uninstall') db.cancelPendingWork(user.id);
+  res.json({ ok: true });
+});
+```
+
+#### Step 2 — Push to a user
+
 ```http
-POST /api/skill-push/:skillId
+POST https://brain.endlessriver.ai/api/skill-push/:skillId
 Authorization: Bearer <HMAC_SECRET>
 Content-Type: application/json
 
 {
-  "userId": "proxied_user_id",
+  "user_id": "<proxyUserId>",
   "responses": [
-    { "type": "notification", "content": { "title": "Daily Report", "body": "..." } }
+    { "type": "notification", "content": { "title": "Medicine Time", "body": "Time to take your blood pressure medicine." } }
   ]
 }
 ```
 
-Use `node-cron` or a job queue to trigger this on a schedule. Store `user.id` + `callback_url` from the first event dispatch.
+**All response types work in push:** `notification`, `feed_item`, `tool_call` (`mail.send`), `set_reminder`. `text` is not valid here — use `notification.tts` for spoken output.
 
-### C. Vision / Multimodal
+**Rate limit:** Default 5 pushes / user / day / skill. Exceeding returns HTTP 429 with `retryAfter` (seconds to UTC midnight).
+
+**Elevated limit:** Set `proactivePushLimit` in your manifest (max 100). Any value above 5 requires a `proactiveReason` and is flagged for admin review at submit. The platform enforces the approved limit; draft/submitted skills use the default 5 regardless.
+
+```json
+{
+  "proactive": true,
+  "proactivePushLimit": 15,
+  "proactiveReason": "Sends standup prompts at 9am, wrapup at 6pm, and overdue task alerts — up to 8 per user on an active day."
+}
+```
+
+#### Full manifest for a proactive skill
+
+```json
+{
+  "proactive": true,
+  "proactivePushLimit": 15,
+  "proactiveReason": "Daily standup + wrapup prompts and task assignment notifications.",
+  "permissions": ["proactive.receive", "user.profile.read"],
+  "endpoints": {
+    "mcp":              "https://your-server.com/mcp",
+    "install_webhook":  "https://your-server.com/install",
+    "user_install_url": "https://your-server.com/trace-install",  // optional — OAuth/config flow before install
+    "deletion_webhook": "https://your-server.com/delete-user"
+  }
+}
+```
+
+#### Scheduling pushes
+
+Use `node-cron` or a job queue. Store `user.id` from the `install_webhook` payload as your push target — **not** from the first webhook dispatch, since passive skills may never receive a dispatch before needing to push.
+
+```typescript
+import cron from 'node-cron';
+
+cron.schedule('* * * * *', async () => {           // every minute
+  const due = db.getDueReminders();
+  for (const r of due) {
+    const res = await fetch(`${BRAIN_URL}/api/skill-push/${SKILL_ID}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${HMAC_SECRET}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: r.to_proxy_user_id, responses: [
+        { type: 'notification', content: { title: 'Reminder', body: r.message, tts: r.message } }
+      ]}),
+    });
+    if (res.ok) db.markSent(r.id);
+    else if (res.status === 429) db.markFailed(r.id); // rate limit — try tomorrow
+  }
+});
+```
+
+### C. Cross-User Write (reminders and todos for other users)
+
+Some skills need to create a reminder or todo in **another user's account** — e.g. a parent sets a medicine reminder for their child, or a team lead assigns a task to a colleague. The platform supports this via `target_user_id` on `set_reminder` and `set_todo`, but enforces a three-layer consent model to prevent any skill from targeting users without their explicit agreement.
+
+#### The three layers
+
+1. **Skill has `cross_user.write` in its manifest permissions** — declared and admin-reviewed at publish time.
+2. **Target user has the skill installed with `proactive.receive` granted** — enforced at the platform level.
+3. **A granted `CrossUserConsent` record exists for this exact sender→recipient pair** — the target user must have explicitly accepted via the interactive consent card on their device.
+
+If any layer fails, the platform silently falls back to creating the reminder/todo for the session user (no error thrown — so skill code never needs to handle a rejection).
+
+#### The consent flow
+
+**Step 1 — Request consent (once per sender→recipient pair)**
+
+After the two users have linked to each other (link code exchange, team join, etc.), return `request_cross_user_consent` from your MCP response:
+
+```json
+{
+  "type": "embedded_responses",
+  "responses": [{
+    "type": "request_cross_user_consent",
+    "content": {
+      "target_user_id": "<recipient's proxyUserId>",
+      "request_message": "Priya wants to send you reminders via Family AI."
+    }
+  }]
+}
+```
+
+The platform sends an interactive card to the recipient's phone. They see the message, who is requesting (skill name), and what accepting means. They tap Accept or Decline.
+
+**Step 2 — Use target_user_id after consent is granted**
+
+```json
+{ "type": "set_reminder", "content": {
+    "reminderText": "Take your blood pressure medicine",
+    "time": "2026-06-10T19:00:00Z",
+    "target_user_id": "<recipient's proxyUserId>"
+  }
+}
+```
+
+The platform checks consent, finds a granted record, resolves the proxyUserId to the real account, and creates the reminder for the recipient. The sender gets no feedback unless the skill explicitly pushes one.
+
+**Step 3 — Consent is revoked when either user uninstalls**
+
+The platform automatically revokes all CrossUserConsent records for a (skill, user) pair when that user uninstalls. Your skill should handle the resulting 403 from skill-push gracefully (don't crash — log and skip).
+
+#### Full manifest for a cross-user skill
+
+```json
+{
+  "proactive": true,
+  "proactivePushLimit": 15,
+  "proactiveReason": "Sends reminders to linked family members at user-scheduled times.",
+  "permissions": ["proactive.receive", "user.profile.read", "cross_user.write"],
+  "endpoints": {
+    "mcp":             "https://your-server.com/mcp",
+    "install_webhook": "https://your-server.com/install"
+  },
+  "dataRetention": {
+    "max_days": 90,
+    "deletion_webhook": "https://your-server.com/delete-user"
+  }
+}
+```
+
+#### When NOT to use cross_user.write
+
+- When you only need to push a **notification** to another user — use `/api/skill-push` with `notification` response type (requires `proactive.receive`, not `cross_user.write`)
+- When both users are in the same session — just return the reminder for the session user
+- When the use case can be solved by the recipient setting their own reminder after receiving a notification
+
+---
+
+### E. Vision / Multimodal
 
 **Two paths depending on `routing_mode`:**
 
@@ -951,3 +1332,6 @@ When helping a developer build a Trace Skill:
 16. **Feed titles** — Short, user-centric titles (note snippet, activity, tags) — not a truncated vision paragraph.
 17. **Reference implementation** — Copy patterns from `skills-server/src/skills/scrapbook/`: hybrid manifest, `pending_context`, `embedded_responses`, SQLite keyed on `user.id`, auto-wrap prior event on `start_event`. See §11 for enrichment patterns (photo-first, voice-first, late enrichment, image follow-up).
 18. **Location** — Request `user.location.read`. Read `toolInput.user.location` (lat/lng/city). Mobile clients sync profile location via `LocationSyncHandler`; brain also falls back to stored profile coords when the request omits them.
+20. **Cross-user reminders/todos need consent first** — If a skill creates reminders or todos for a different user via `target_user_id`, it must first obtain a granted `CrossUserConsent` record. Return `request_cross_user_consent` immediately after two users link (link code exchange, team join). Do not try `target_user_id` before consent — the platform silently falls back to the session user, which is confusing. The consent card is interactive on the recipient's device; users explicitly Accept or Decline. See §10C.
+21. **Proactive push rate limits are per-user** — The daily push cap (default 5, configurable with `proactivePushLimit`) is per recipient, not per team. A team with 6 members each receiving 5 pushes = 6×5 = 30 total pushes, all within limits. Design schedulers to batch multiple notifications into a single push per user per event (e.g. "You have 3 overdue tasks" rather than one push per task). Handle 429 responses gracefully — log, mark failed, retry next day.
+22. **`install_webhook` is the only reliable way to get proxyUserIds for push** — Do not rely on the first webhook dispatch to register users for proactive push. Passive skills may never receive a dispatch before needing to push. Always implement `install_webhook` for any skill that uses proactive push or cross-user features.
