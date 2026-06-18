@@ -1,23 +1,26 @@
 {
   "name": "Template Skill",
+  "description": "Starter hybrid skill for voice dialog and background photo logging.",
   "version": "1.0.0",
   "interface": "hybrid",
   "endpoints": {
     "webhook": "https://your-domain.ngrok-free.app/webhook",
     "mcp": "https://your-domain.ngrok-free.app/mcp",
-    "install_webhook": "https://your-domain.ngrok-free.app/trace-install",
-    "user_install_url": "https://your-domain.ngrok-free.app/install"
+    "install_webhook": "https://your-domain.ngrok-free.app/install",
+    "user_install_url": "https://your-domain.ngrok-free.app/trace-install"
   },
   "triggers": [
     { "channel": "instant.message", "routing_mode": "active" },
-    { "channel": "instant.image",      "routing_mode": "active" },
-    { "channel": "media.photo",        "routing_mode": "passive" }
+    { "channel": "instant.image", "routing_mode": "active" },
+    { "channel": "media.photo", "routing_mode": "passive" }
   ],
   "domains": {
     "general": "Handle general greetings and tests for the template skill. Match utterances like 'test template' or 'hello from template'."
   },
+  "execution": {
+    "mode": "async"
+  },
   "permissions": [
-    "notification.send",
     "user.profile.read",
     "user.location.read"
   ],
@@ -25,7 +28,7 @@
     "mail.send"
   ],
   "hw_triggers": [],
-  "data_retention": {
+  "dataRetention": {
     "max_days": 30,
     "deletion_webhook": "https://your-domain.ngrok-free.app/delete-user"
   }

@@ -87,6 +87,8 @@ The manifest is the single source of truth for how Trace routes events to your s
     { "channel": "media.photo",        "routing_mode": "passive" },
     { "channel": "instant.message", "routing_mode": "active"  }
   ],
+  // schedule[] (optional): cron triggers registered on user install — fires webhook with channel schedule.<skillId>
+  // "schedule": [{ "cron": "0 9 * * *", "label": "morning", "timezone": "user" }]
   // instant.image — real-time photo taken during an active AI conversation (glasses "what's this?",
   //   phone image sent to chat). Active + mcp/hybrid → MCP synchronous call, skill can speak + AWAIT_INPUT.
   // media.photo  — WiFi-synced background photo. Use passive for silent logging; active-MCP also
@@ -201,7 +203,13 @@ Skills can opt into two hardware capabilities by declaring them in `hw_triggers`
 
 Your skill sends an `hw_action` response with `action: "instant.image"`. The platform fires the device camera, runs AI image analysis, and dispatches the result **directly back to your skill only** via the synthetic `hw.image_result` channel. No other skill receives it.
 
-**Requires:** `hw.camera.trigger` in `permissions`.
+**Requires:** `hw.camera.trigger` in `permissions` (the Developer Console and platform auto-add this when you enable `instant.image` in `hw_triggers`; submit is rejected if the pairing is missing).
+
+**End-to-end platform flow:**
+1. Your skill returns `hw_action` with `action: "instant.image"` (from webhook callback, MCP `embedded_responses`, or proactive push).
+2. Brain validates `hw_triggers` + `hw.camera.trigger`, then pushes `skill:hw-action` to the user's device.
+3. The Trace app captures a photo, runs vision via `POST /api/ai/image` with `hwSkillCapture: true` (no user-facing agent/TTS).
+4. The app POSTs `POST /api/skill-image-result`; brain dispatches the analysis to **your skill only** on `hw.image_result`.
 
 **Your webhook/MCP receives on `hw.image_result`:**
 ```json
@@ -260,7 +268,7 @@ When your skill sends a notification whose `body` contains `?`, the glasses auto
 1. Only add `"instant.image"` when the skill flow explicitly requires the skill to *initiate* a camera capture. Do not add it just because the skill processes photos — use channel triggers for that.
 2. Only add `"instant.dialog"` when the skill sends question-style notifications and expects the user to answer hands-free.
 3. Both can coexist: `hw_triggers: ["instant.image", "instant.dialog"]` — e.g. "Should I photograph that?" (auto-listen) then fire camera on yes.
-4. Always add `"hw.camera.trigger"` to `permissions` alongside `"instant.image"`.
+4. Always include `"hw.camera.trigger"` in `permissions` alongside `"instant.image"` — the Developer Console adds it automatically when you check the HW trigger; the platform also derives it on save/submit.
 
 ---
 
@@ -302,10 +310,11 @@ Use `express.raw({ type: 'application/json' })` before JSON parsing so `rawBody`
 | `media.audio` | Glasses | WiFi sync | Background audio recording arrived |
 | `instant.image` | Glasses, Phone | During active AI conversation | Real-time photo taken while user is talking ("what's this?") or phone image sent to chat |
 | `instant.message` | Glasses, Phone | Real-time | Voice, text, or image+query from user |
+| `device.context` | Glasses, Phone app | On change | Battery, wearing, activity state — passive webhook only |
 
 **`instant.image` vs `media.photo`:** Use `instant.image` when you want to respond immediately with voice and optionally ask a follow-up. Use `media.photo` (passive) for silent background processing of WiFi-synced photos.
 
-**Phone mode rule:** All phone inputs (image, voice, text) go to `instant.message` OR `instant.image` (phone images via AI chat). Phone video is the only exception — it goes to `media.video`.
+**Phone routing:** Phone voice/text → brain agent → MCP. Phone AI-chat images → `instant.image`. Phone video → `media.video`.
 
 ### Trigger Configuration (in Developer Console)
 ```json
@@ -375,7 +384,7 @@ Every `instant.message` event has a normalized payload. The platform pre-process
 | `phone_voice_image` | Voice + photo simultaneously from phone | ✓ | ✓ image |
 | `ai_agent` | Back-reference: user refers to a previously captured image ("save that", "add that receipt") | ✓ | ✓ image† |
 
-**† Multi-turn back-reference (`ai_agent`):** When a user captures an image earlier in a session and later refers to it by pronoun or context ("save that", "log that image"), the platform resolves the prior image from session memory (up to 5 recent captures, 12-hour window) and dispatches on `instant.message` with `source: "ai_agent"`. The `items[0]` contains the original image URL and its pre-analysis description. Your skill **must** have an `instant.message` trigger to receive back-reference events — `media.photo` alone is not sufficient. Use `{ "hasImage": true }` as a filter to match both direct image inputs and back-references.
+**† Multi-turn back-reference (`ai_agent`):** When a user captures an image earlier in a session and later refers to it by pronoun or context ("save that", "log that image"), the platform resolves the prior image from session memory (up to 5 recent captures, 12-hour window) and routes to your skill via MCP `handle_dialog` with `items[]` populated and `context.source = "ai_agent"`. Your skill **must** have an `instant.message` trigger to be eligible for back-reference routing. Use `{ "hasImage": true }` as a filter to match both direct image inputs and back-references.
 
 **Key fields:**
 - `event.query` — the user's text or voice transcript (empty string if image-only)
@@ -1027,7 +1036,7 @@ Some skills need to create a reminder or todo in **another user's account** — 
 2. **Target user has the skill installed with `proactive.receive` granted** — enforced at the platform level.
 3. **A granted `CrossUserConsent` record exists for this exact sender→recipient pair** — the target user must have explicitly accepted via the interactive consent card on their device.
 
-If any layer fails, the platform silently falls back to creating the reminder/todo for the session user (no error thrown — so skill code never needs to handle a rejection).
+If any layer fails, the platform **does not create** the reminder/todo. For missing consent or permission, the app may receive a `skill:cross_user_blocked` Pusher event (`reason: consent_pending` or `no_permission`). Request consent first via `request_cross_user_consent`.
 
 #### The consent flow
 
@@ -1306,6 +1315,8 @@ Rules:
 2. **Deployment:** Railway, Render, or any VPS. Ensure the endpoint is publicly accessible.
 3. **Validate payloads:** log `req.body` on first run to understand the exact shape for your channel.
 4. **HMAC in dev:** temporarily log the expected vs received signature if verification fails — check that you're using `rawBody`, not the parsed JSON. Remember: HMAC verification applies to `/webhook` only — do not add it to `/mcp`.
+5. **Developer Console Test tab:** fire synthetic signed payloads (30/hr per skill). No vision preprocessing in test — `imageDescription` is null. AWAIT_INPUT multi-turn works on MCP/hybrid skills via the violet reply panel.
+6. **Execution logs:** after publish, the Logs tab shows dispatch status, latency, and request/response payloads per turn.
 
 ---
 
@@ -1332,6 +1343,6 @@ When helping a developer build a Trace Skill:
 16. **Feed titles** — Short, user-centric titles (note snippet, activity, tags) — not a truncated vision paragraph.
 17. **Reference implementation** — Copy patterns from `skills-server/src/skills/scrapbook/`: hybrid manifest, `pending_context`, `embedded_responses`, SQLite keyed on `user.id`, auto-wrap prior event on `start_event`. See §11 for enrichment patterns (photo-first, voice-first, late enrichment, image follow-up).
 18. **Location** — Request `user.location.read`. Read `toolInput.user.location` (lat/lng/city). Mobile clients sync profile location via `LocationSyncHandler`; brain also falls back to stored profile coords when the request omits them.
-20. **Cross-user reminders/todos need consent first** — If a skill creates reminders or todos for a different user via `target_user_id`, it must first obtain a granted `CrossUserConsent` record. Return `request_cross_user_consent` immediately after two users link (link code exchange, team join). Do not try `target_user_id` before consent — the platform silently falls back to the session user, which is confusing. The consent card is interactive on the recipient's device; users explicitly Accept or Decline. See §10C.
+20. **Cross-user reminders/todos need consent first** — If a skill creates reminders or todos for a different user via `target_user_id`, it must first obtain a granted `CrossUserConsent` record. Return `request_cross_user_consent` immediately after two users link (link code exchange, team join). Do not try `target_user_id` before consent — the platform blocks the action and may emit `skill:cross_user_blocked`. The consent card is interactive on the recipient's device; users explicitly Accept or Decline. See §10C.
 21. **Proactive push rate limits are per-user** — The daily push cap (default 5, configurable with `proactivePushLimit`) is per recipient, not per team. A team with 6 members each receiving 5 pushes = 6×5 = 30 total pushes, all within limits. Design schedulers to batch multiple notifications into a single push per user per event (e.g. "You have 3 overdue tasks" rather than one push per task). Handle 429 responses gracefully — log, mark failed, retry next day.
 22. **`install_webhook` is the only reliable way to get proxyUserIds for push** — Do not rely on the first webhook dispatch to register users for proactive push. Passive skills may never receive a dispatch before needing to push. Always implement `install_webhook` for any skill that uses proactive push or cross-user features.
